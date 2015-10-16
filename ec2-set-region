@@ -1,0 +1,10 @@
+#!/bin/bash
+
+if (( $# == 0 )); then
+  echo "Usage: ec2-set-region region"
+  echo "Examples:"
+  echo "    ec2-set-region ap-southeast-1"
+  exit 1
+fi
+export EC2_REGION=$1
+export EC2_URL=https://ec2.${EC2_REGION}.amazonaws.com

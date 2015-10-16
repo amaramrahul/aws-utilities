@@ -1,0 +1,50 @@
+#!/bin/bash
+
+set -e
+
+# Options are taken from http://docs.aws.amazon.com/AWSEC2/latest/CommandLineReference/CLTRG-common-args-api.html
+
+# See /usr/share/doc/util-linux/examples/getopt-parse.bash for getopt example
+TEMP=$(getopt --name "$0" --options "U:O:W:T:K:C:" --longoptions "debug,region:,url:,aws-access-key:,aws-secret-key:,security-token:,connection-timeout:,request-timeout:,private-key:,cert:" -- "$@")
+
+# Bad arguments, something has gone wrong with the getopt command.
+if [ $? -ne 0 ]; then
+  echo "Termintaing ..." >&2
+  exit 1
+fi
+
+# Note the quotes around `$TEMP': they are essential!
+eval set -- "$TEMP"
+
+# Now go through all the options
+while true; do
+  case "$1" in
+    --debug)
+      set -x
+      shift;;
+
+    --region|-U|--url|-O|--aws-access-key|-W|--aws-secret-key|-T|--security-token|--connection-timeout|--request-timeout|-K|--private-key|-C|--cert)
+      ec2_options="$e2_options $1 $2"
+      shift 2;;
+
+    --)
+      shift
+      break;;
+
+    *)
+      echo "Error parsing arguments" >&2
+      exit 1;;
+  esac
+done
+
+for arg; do
+  instance_search_regex=$(echo "$arg" | sed -r 's/ /\.\*/g')
+  if [ -z "$instances_search_regex" ]; then
+    instances_search_regex=$instance_search_regex
+  else
+    instances_search_regex="${instances_search_regex}|${instance_search_regex}"
+  fi
+done
+
+ec2-describe-tags $ec2_options --filter "resource-type=instance" --filter "key=Name" | grep -iE "$instances_search_regex" | cut -f 3,5
+

@@ -1,0 +1,120 @@
+#!/bin/bash
+
+set -e
+
+# Options are taken from http://docs.aws.amazon.com/AWSEC2/latest/CommandLineReference/CLTRG-common-args-api.html and "man ssh"
+
+# Default values
+random=false
+first=false
+last=false
+
+# See /usr/share/doc/util-linux/examples/getopt-parse.bash for getopt example
+TEMP=$(getopt --name "$0" --options "U:O:W:T:K:C:D:fi:L:l:No:p:R:vX" --longoptions "debug,first,last,random,region:,url:,aws-access-key:,aws-secret-key:,security-token:,connection-timeout:,request-timeout:,private-key:,cert:" -- "$@")
+
+# Bad arguments, something has gone wrong with the getopt command.
+if [ $? -ne 0 ]; then
+  echo "Terminating ..." >&2
+  exit 1
+fi
+
+# Note the quotes around `$TEMP': they are essential!
+eval set -- "$TEMP"
+
+# Now go through all the options
+while true; do
+  case "$1" in
+    --debug)
+      set -x
+      shift;;
+
+    --region|-U|--url|-O|--aws-access-key|-W|--aws-secret-key|-T|--security-token|--connection-timeout|--request-timeout|-K|--private-key|-C|--cert)
+      ec2_options="$e2_options $1 $2"
+      shift 2;;
+
+    -f|-N|-v|-X)
+      ssh_options="$ssh_options $1"
+      shift 1;;
+
+    -D|-i|-L|-l|-o|-p|-R)
+      ssh_options="$ssh_options $1 $2"
+      shift 2;;
+
+    --first)
+      first=true
+      shift;;
+
+    --last)
+      last=true
+      shift;;
+
+    --random)
+      random=true
+      shift;;
+
+    --)
+      shift
+      break;;
+
+    *)
+      echo "Error parsing arguments" >&2
+      exit 1;;
+  esac
+done
+
+if (( $# == 0 )); then
+  echo "Usage: ec2-ssh-instance [ec2-options] [user@]instance" >&2
+  echo "Examples:" >&2
+  echo "    ec2-ssh-instance i-03b4a46b" >&2
+  echo "    ec2-ssh-instance ubuntu@i-03b4a46b" >&2
+  echo "    ec2-ssh-instance --region ap-southeast-1 'ubuntu@staging'" >&2
+  exit 1
+fi
+
+# Separate user if passed
+if echo "$1" | grep "@" > /dev/null; then
+  user=$(echo "$1" | cut -d '@' -f 1)
+  instance_pattern=$(echo "$1" | cut -d '@' -f 2)
+else
+  instance_pattern=$1
+fi
+
+# Get instance id and name
+instance=$(ec2-get-instance $ec2_options "$instance_pattern")
+if [ -z "$instance" ]; then
+  echo "No instances found matching pattern '$instance_pattern'." >&2
+  exit 1
+elif (($(echo -e "$instance" | grep -E "^i-" | wc -l) > 1)); then
+  if $first; then
+    instance=$(echo -e "$instance" | head -n 1)
+  elif $last; then
+    instance=$(echo -e "$instance" | tail -n 1)
+  elif $random; then
+    instance=$(echo -e "$instance" | shuf -n 1)
+  else
+    echo -e "Multiple instances found matching pattern '$instance_pattern'. Refine your search.\n$instance" >&2
+    exit 1
+  fi
+fi
+instance_id=$(echo "$instance" | cut -f 1)
+instance_name=$(echo "$instance" | cut -f 2)
+
+# Get host
+host=$(ec2-describe-instances $ec2_options --hide-tags $instance_id | grep -E "^INSTANCE\s" | cut -f 18)
+if [ -z "$host" ]; then
+  echo "Unable to fetch host from instance id. Have you set the ec2-region properly?" >&2
+  exit 1
+fi
+
+# Finally SSH
+if [ -n "$user" ]; then
+  ssh_cmd="ssh $ssh_options $user@$host"
+else
+  ssh_cmd="ssh $ssh_options $host"
+fi
+if [ -n "$2" ]; then
+  ssh_cmd="$ssh_cmd '$2'"
+fi
+echo $ssh_cmd "# $instance_name ($instance_id)"
+eval $ssh_cmd
+

@@ -1,0 +1,131 @@
+#!/bin/bash
+
+set -e
+
+# Options are taken from http://docs.aws.amazon.com/AWSEC2/latest/CommandLineReference/CLTRG-common-args-api.html
+
+# Default values
+random=false
+first=false
+last=false
+
+# See /usr/share/doc/util-linux/examples/getopt-parse.bash for getopt example
+TEMP=$(getopt --name "$0" --options "U:O:W:T:K:C:d:g:k:t:z:" --longoptions "debug,first,last,random,region:,url:,aws-access-key:,aws-secret-key:,security-token:,connection-timeout:,request-timeout:,private-key:,cert:,user-data:,group:,key:,instance-type:,availability-zone:,name:,type:,cc:" -- "$@")
+
+# Bad arguments, something has gone wrong with the getopt command.
+if [ $? -ne 0 ]; then
+  echo "Termintaing ..." >&2
+  exit 1
+fi
+
+# Note the quotes around `$TEMP': they are essential!
+eval set -- "$TEMP"
+
+# Now go through all the options
+while true; do
+  case "$1" in
+    --debug)
+      set -x
+      shift;;
+
+    --region|-U|--url|-O|--aws-access-key|-W|--aws-secret-key|-T|--security-token|--connection-timeout|--request-timeout|-K|--private-key|-C|--cert)
+      ec2_options="$e2_options $1 $2"
+      if [ "$1" == "--region" ]; then
+        region=$2
+      fi
+      shift 2;;
+
+    -d|--user-data)
+      user_data=$2
+      shift 2;;
+
+    -g|--group)
+      group=$2
+      shift 2;;
+      
+    -k|--key)
+      key=$2
+      shift 2;;
+    
+    -t|--instance-type)
+      instance_type=$2
+      shift 2;;
+    
+    -z|--availability-zone)
+      availability_zone=$2
+      shift 2;;
+
+    --name)
+      name=$2
+      shift 2;;
+
+    --type)
+      type=$2
+      shift 2;;
+
+    --cc)
+      cc=$2
+      shift 2;;
+
+    --first)
+      first=true
+      shift;;
+
+    --last)
+      last=true
+      shift;;
+
+    --random)
+      random=true
+      shift;;
+
+    --)
+      shift
+      break;;
+
+    *)
+      echo "Error parsing arguments" >&2
+      exit 1;;
+  esac
+done
+
+if [  $# -eq 0 -o -z "$region" -o -z "$group" -o -z "$key" -o -z "$instance_type" -o -z "$availability_zone" -o -z "$name" -o -z "$type" -o -z "$cc" ]; then
+  echo "Usage Examples:" >&2
+  echo "    ec2-launch-instance 'rtb bidserver' --last --instance-type c3.xlarge --region us-east-1 --availability-zone us-east-1d --user-data rahul-dev --name 'RTB Rahul BidServer' --type 'DEV' --cc RTB --group 'RTB-BidServer' --key rahul.amaram" >&2
+  echo "    ec2-launch-instance 'vizury linux' --last --instance-type c1.medium --region eu-west-1 --availability-zone eu-west-1a --user-data rahul-dev --name 'RTB Rahul RC' --type 'DEV' --cc RTB --group 'RTB-Refresh-Cache-Server' --key rahul.amaram" >&2
+  exit 1
+fi
+
+# Image name pattern
+image_pattern=$1
+
+# Get image id and name
+image=$(ec2-get-image $ec2_options "$image_pattern")
+if [ -z "$image" ]; then
+  echo "No images found matching pattern '$image_pattern'." >&2
+  exit 1
+elif (($(echo -e "$image" | grep -E "^ami-" | wc -l) > 1)); then
+  if $first; then
+    image=$(echo -e "$image" | head -n 1)
+  elif $last; then
+    image=$(echo -e "$image" | tail -n 1)
+  elif $random; then
+    image=$(echo -e "$image" | shuf -n 1)
+  else
+    echo -e "Multiple images found matching pattern '$image_pattern'. Refine your search.\n$image" >&2
+    exit 1
+  fi
+fi
+image_id=$(echo "$image" | cut -f 1)
+image_name=$(echo "$image" | cut -f 2)
+
+
+# Launch instance
+ec2run_cmd="ec2-run-instances $ec2_options $image_id --user-data '$user_data' --group '$group' --key '$key' --instance-type $instance_type --availability-zone $availability_zone"
+echo $ec2run_cmd "# $image_name ($image_id)"
+instance_id=$(eval $ec2run_cmd | grep -E "^INSTANCE" | awk '{ print $2 }')
+
+# Add tags
+ec2addtag_cmd="ec2-create-tags $ec2_options $instance_id --tag Name='$name' --tag Type='$type' --tag CC='$cc'"
+echo $ec2addtag_cmd
+eval $ec2addtag_cmd
